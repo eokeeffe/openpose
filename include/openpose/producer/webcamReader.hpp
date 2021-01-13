@@ -40,9 +40,10 @@ namespace op
 
     private:
         const int mIndex;
+        const bool mWebcamStarted;
         long long mFrameNameCounter;
         bool mThreadOpened;
-        cv::Mat mBuffer;
+        Matrix mBuffer;
         std::mutex mBufferMutex;
         std::atomic<bool> mCloseThread;
         std::thread mThread;
@@ -51,9 +52,9 @@ namespace op
         std::atomic<int> mDisconnectedCounter;
         Point<int> mResolution;
 
-        cv::Mat getRawFrame();
+        Matrix getRawFrame();
 
-        std::vector<cv::Mat> getRawFrames();
+        std::vector<Matrix> getRawFrames();
 
         void bufferingThread();
 

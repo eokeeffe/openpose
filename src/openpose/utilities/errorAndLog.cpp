@@ -1,10 +1,10 @@
+#include <openpose/utilities/errorAndLog.hpp>
 #include <atomic>
 #include <mutex>
 #include <ctime> // std::tm, std::time_t
 #include <fstream> // std::ifstream, std::ofstream
 #include <iostream> // std::cout, std::endl
 #include <stdexcept> // std::runtime_error
-#include <openpose/utilities/errorAndLog.hpp>
 
 namespace op
 {
@@ -48,7 +48,7 @@ namespace op
                 #endif
             }
 
-            void log(const std::string& message) { DebugInUnity(message, 0); }
+            void opLog(const std::string& message) { DebugInUnity(message, 0); }
             void logWarning(const std::string& message) { DebugInUnity(message, 1); }
             void logError(const std::string& message) { DebugInUnity(message, -1); }
         }
@@ -190,13 +190,13 @@ namespace op
                 errorMessageToPrint = errorEnum + errorThreadLine + "\n" + errorMessageToPrint;
             }
             else if (errorMode == 3)
-                errorMessageToPrint += "\n" + errorEnum + "[Error occurred in a destructor, so no std::exception"
-                    " has been thrown. Returning with exit status 0]";
+                errorMessageToPrint += "\n" + errorEnum + "[Error occurred in a destructor or in the OpenPose"
+                    " Unity Plugin, so no std::exception has been thrown. Returning with exit status 0]";
             errorMessageToPropagate = createFullMessage(message) + errorMessageToPrint + "\n";
             if (errorMode == 1)
             {
                 errorMessageToPropagate = errorInitBase + " occurred on a thread. OpenPose closed all its"
-                    " threads and then propagated the error to the main thread:\n"
+                    " threads and then propagated the error to the main thread. Error description:\n\n"
                     + errorMessageToPropagate.substr(errorInit.size(), errorMessageToPropagate.size()-1);
             }
             if (errorMode == 2)
@@ -214,11 +214,6 @@ namespace op
         if (checkIfErrorHas(ErrorMode::FileLogging))
             fileLogging(errorMessageToPrint);
 
-        // Unity logError
-        #ifdef USE_UNITY_SUPPORT
-            UnityDebugger::logError(errorMessageToPrint);
-        #endif
-
         // std::runtime_error
         if (errorMode == 1)
         {
@@ -227,8 +222,16 @@ namespace op
             sThreadErrorMessages.emplace_back(errorMessageToPropagate);
         }
         else
+        {
+            // Unity logError
+            #ifdef USE_UNITY_SUPPORT
+                if (errorMode == 3)
+                    UnityDebugger::logError(errorMessageToPropagate);
+            #endif
+
             if (checkIfErrorHas(ErrorMode::StdRuntimeError) && errorMode != 3)
                 throw std::runtime_error{errorMessageToPropagate};
+        }
     }
 
 
@@ -292,8 +295,9 @@ namespace op
         errorAux(3, message, line, function, file);
     }
 
-    void log(const std::string& message, const Priority priority, const int line, const std::string& function,
-             const std::string& file)
+    void opLog(
+        const std::string& message, const Priority priority, const int line, const std::string& function,
+        const std::string& file)
     {
         if (priority >= ConfigureLog::getPriorityThreshold())
         {
@@ -309,7 +313,7 @@ namespace op
 
             // Unity log
             #ifdef USE_UNITY_SUPPORT
-                UnityDebugger::log(infoMessage);
+                UnityDebugger::opLog(infoMessage);
             #endif
         }
     }
@@ -345,10 +349,10 @@ namespace op
     namespace ConfigureLog
     {
         // ConfigureLog - Private variables
-        std::atomic<Priority> sPriorityThreshold        {Priority::High};
-        // std::atomic<Priority> sPriorityThreshold        {Priority::None};
-        std::vector<LogMode> sLoggingModes              {LogMode::StdCout};
-        std::mutex sConfigureLogMutex                   {};
+        std::atomic<Priority> sPriorityThreshold    {Priority::High};
+        // std::atomic<Priority> sPriorityThreshold   {Priority::None};
+        std::vector<LogMode> sLoggingModes          {LogMode::StdCout};
+        // std::mutex sConfigureLogMutex              {}; // In addition, getLogModes() should return copy (no ref)
 
         Priority getPriorityThreshold()
         {
@@ -357,7 +361,7 @@ namespace op
 
         const std::vector<LogMode>& getLogModes()
         {
-            const std::lock_guard<std::mutex> lock{sConfigureLogMutex};
+            // const std::lock_guard<std::mutex> lock{sConfigureLogMutex};
             return sLoggingModes;
         }
 
@@ -368,7 +372,7 @@ namespace op
 
         void setLogModes(const std::vector<LogMode>& loggingModes)
         {
-            const std::lock_guard<std::mutex> lock{sConfigureLogMutex};
+            // const std::lock_guard<std::mutex> lock{sConfigureLogMutex};
             sLoggingModes = loggingModes;
         }
     }

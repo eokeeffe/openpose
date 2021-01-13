@@ -1,10 +1,11 @@
+#include <openpose/pose/poseExtractorNet.hpp>
+#include <cmath> // std::round
 #ifdef USE_CUDA
     #include <cuda_runtime_api.h>
     #include <openpose/gpu/cuda.hpp>
 #endif
 #include <openpose/core/enumClasses.hpp>
 #include <openpose/utilities/fastMath.hpp>
-#include <openpose/pose/poseExtractorNet.hpp>
 
 namespace op
 {
@@ -56,10 +57,13 @@ namespace op
         try
         {
             // Error check
-            if (mHeatMapScaleMode != ScaleMode::ZeroToOne && mHeatMapScaleMode != ScaleMode::PlusMinusOne
+            if (mHeatMapScaleMode != ScaleMode::ZeroToOne
+                && mHeatMapScaleMode != ScaleMode::ZeroToOneFixedAspect
+                && mHeatMapScaleMode != ScaleMode::PlusMinusOne
+                && mHeatMapScaleMode != ScaleMode::PlusMinusOneFixedAspect
                 && mHeatMapScaleMode != ScaleMode::UnsignedChar && mHeatMapScaleMode != ScaleMode::NoScale)
-                error("The ScaleMode heatMapScaleMode must be ZeroToOne, PlusMinusOne, UnsignedChar, or NoScale.",
-                      __LINE__, __FUNCTION__, __FILE__);
+                error("The ScaleMode heatMapScaleMode must be ZeroToOne, ZeroToOneFixedAspect, PlusMinusOne,"
+                    " PlusMinusOneFixedAspect or UnsignedChar.", __LINE__, __FUNCTION__, __FILE__);
 
             // Properties - Init to 0
             for (auto& property : mProperties)
@@ -135,7 +139,8 @@ namespace op
                     if (mHeatMapScaleMode != ScaleMode::NoScale)
                     {
                         // Change from [0,1] to [-1,1]
-                        if (mHeatMapScaleMode == ScaleMode::PlusMinusOne)
+                        if (mHeatMapScaleMode == ScaleMode::PlusMinusOne
+                            || mHeatMapScaleMode == ScaleMode::PlusMinusOneFixedAspect)
                             for (auto i = 0u ; i < volumeBodyParts ; i++)
                                 heatMaps[i] = fastTruncate(heatMaps[i]) * 2.f - 1.f;
                         // [0, 255]
@@ -152,31 +157,41 @@ namespace op
                 // Background
                 if (heatMapTypesHas(mHeatMapTypes, HeatMapType::Background))
                 {
-                    auto* heatMapsPtr = heatMaps.getPtr() + totalOffset;
-                    #ifdef USE_CUDA
-                        cudaMemcpy(heatMapsPtr, getHeatMapGpuConstPtr() + volumeBodyParts,
-                                   channelOffset * sizeof(float), cudaMemcpyDeviceToHost);
-                    #else
-                        const auto* heatMapCpuPtr = getHeatMapCpuConstPtr();
-                        std::copy(heatMapCpuPtr + volumeBodyParts, heatMapCpuPtr + volumeBodyParts + channelOffset,
-                                  heatMapsPtr);
-                    #endif
-                    if (mHeatMapScaleMode != ScaleMode::NoScale)
+                    if (addBkgChannel(mPoseModel))
                     {
-                        // Change from [0,1] to [-1,1]
-                        if (mHeatMapScaleMode == ScaleMode::PlusMinusOne)
-                            for (auto i = 0u ; i < channelOffset ; i++)
-                                heatMapsPtr[i] = fastTruncate(heatMapsPtr[i]) * 2.f - 1.f;
-                        // [0, 255]
-                        else if (mHeatMapScaleMode == ScaleMode::UnsignedChar)
-                            for (auto i = 0u ; i < channelOffset ; i++)
-                                heatMapsPtr[i] = (float)positiveIntRound(fastTruncate(heatMapsPtr[i]) * 255.f);
-                        // Avoid values outside original range
-                        else
-                            for (auto i = 0u ; i < channelOffset ; i++)
-                                heatMapsPtr[i] = fastTruncate(heatMapsPtr[i]);
+                        auto* heatMapsPtr = heatMaps.getPtr() + totalOffset;
+                        #ifdef USE_CUDA
+                            cudaMemcpy(heatMapsPtr, getHeatMapGpuConstPtr() + volumeBodyParts,
+                                       channelOffset * sizeof(float), cudaMemcpyDeviceToHost);
+                        #else
+                            const auto* heatMapCpuPtr = getHeatMapCpuConstPtr();
+                            std::copy(
+                                heatMapCpuPtr + volumeBodyParts, heatMapCpuPtr + volumeBodyParts + channelOffset,
+                                heatMapsPtr);
+                        #endif
+                        if (mHeatMapScaleMode != ScaleMode::NoScale)
+                        {
+                            // Change from [0,1] to [-1,1]
+                            if (mHeatMapScaleMode == ScaleMode::PlusMinusOne
+                                || mHeatMapScaleMode == ScaleMode::PlusMinusOneFixedAspect)
+                                for (auto i = 0u ; i < channelOffset ; i++)
+                                    heatMapsPtr[i] = fastTruncate(heatMapsPtr[i]) * 2.f - 1.f;
+                            // [0, 255]
+                            else if (mHeatMapScaleMode == ScaleMode::UnsignedChar)
+                                for (auto i = 0u ; i < channelOffset ; i++)
+                                    heatMapsPtr[i] = (float)positiveIntRound(fastTruncate(heatMapsPtr[i]) * 255.f);
+                            // Avoid values outside original range
+                            else
+                                for (auto i = 0u ; i < channelOffset ; i++)
+                                    heatMapsPtr[i] = fastTruncate(heatMapsPtr[i]);
+                        }
+                        totalOffset += (unsigned int)channelOffset;
                     }
-                    totalOffset += (unsigned int)channelOffset;
+                    else
+                    {
+                        error("You enabled `--heatmaps_add_bkg` for a model that does not contain one. Please,"
+                              " remove this flag for this model.", __LINE__, __FUNCTION__, __FILE__);
+                    }
                 }
                 // PAFs
                 if (heatMapTypesHas(mHeatMapTypes, HeatMapType::PAFs))
@@ -184,18 +199,19 @@ namespace op
                     auto* heatMapsPtr = heatMaps.getPtr() + totalOffset;
                     #ifdef USE_CUDA
                         cudaMemcpy(heatMapsPtr,
-                                   getHeatMapGpuConstPtr() + volumeBodyParts + channelOffset,
+                                   getHeatMapGpuConstPtr() + volumeBodyParts + (addBkgChannel(mPoseModel) ? channelOffset : 0),
                                    volumePAFs * sizeof(float), cudaMemcpyDeviceToHost);
                     #else
                         const auto* heatMapCpuPtr = getHeatMapCpuConstPtr();
-                        std::copy(heatMapCpuPtr + volumeBodyParts + channelOffset,
-                                  heatMapCpuPtr + volumeBodyParts + channelOffset + volumePAFs,
+                        std::copy(heatMapCpuPtr + volumeBodyParts + (addBkgChannel(mPoseModel) ? channelOffset : 0),
+                                  heatMapCpuPtr + volumeBodyParts + (addBkgChannel(mPoseModel) ? channelOffset : 0) + volumePAFs,
                                   heatMapsPtr);
                     #endif
                     if (mHeatMapScaleMode != ScaleMode::NoScale)
                     {
                         // Change from [-1,1] to [0,1]. Note that PAFs are in [-1,1]
-                        if (mHeatMapScaleMode == ScaleMode::ZeroToOne)
+                        if (mHeatMapScaleMode == ScaleMode::ZeroToOne
+                            || mHeatMapScaleMode == ScaleMode::ZeroToOneFixedAspect)
                             for (auto i = 0u ; i < volumePAFs ; i++)
                                 heatMapsPtr[i] = fastTruncate(heatMapsPtr[i], -1.f) * 0.5f + 0.5f;
                         // [0, 255]
@@ -325,10 +341,10 @@ namespace op
         try
         {
             auto& propertyElement = mProperties.at((int)property);
-            log("Property " + std::to_string((int)property)
+            opLog("Property " + std::to_string((int)property)
                 + " set from " + std::to_string(propertyElement)
                 + " to " + std::to_string(value), Priority::High);
-            propertyElement = {value};
+            propertyElement = value;
         }
         catch (const std::exception& e)
         {

@@ -3,16 +3,17 @@
 
 #include <memory> // std::shared_ptr
 #include <vector>
-#include <opencv2/core/core.hpp> // cv::Mat
 #include <openpose/core/macros.hpp>
+#include <openpose/core/matrix.hpp>
+#include <openpose/utilities/errorAndLog.hpp>
 
 namespace op
 {
     /**
      * Array<T>: The OpenPose Basic Raw Data Container
      * This template class implements a multidimensional data array. It is our basic data container, analogous to
-     * cv::Mat in OpenCV, Tensor in Torch/TensorFlow or Blob in Caffe.
-     * It wraps a cv::Mat and a std::shared_ptr, both of them pointing to the same raw data. I.e. they both share the
+     * Mat in OpenCV, Tensor in Torch/TensorFlow or Blob in Caffe.
+     * It wraps a Matrix and a std::shared_ptr, both of them pointing to the same raw data. I.e. they both share the
      * same memory, so we can read and modify this data in both formats with no performance impact.
      * Hence, it keeps high performance while adding high-level functions.
      */
@@ -86,6 +87,26 @@ namespace op
          * is {p,k,m}, the resulting Array<T> is {1,k,m}.
          */
         Array(const Array<T>& array, const int index, const bool noCopy = false);
+
+        /**
+         * Array constructor. It manually copies the Array<T2> into the new Array<T>
+         * @param array Array<T2> with a format T2 different to the current Array type T.
+         */
+        template<typename T2>
+        Array(const Array<T2>& array) :
+            Array{array.getSize()}
+        {
+            try
+            {
+                // Copy
+                for (auto i = 0u ; i < array.getVolume() ; i++)
+                    pData[i] = T(array[i]);
+            }
+            catch (const std::exception& e)
+            {
+                error(e.what(), __LINE__, __FUNCTION__, __FILE__);
+            }
+        }
 
         /**
          * Copy constructor.
@@ -167,10 +188,28 @@ namespace op
 
         /**
          * Data allocation function.
-         * It internally allocates memory and copies the data of the argument to the Array allocated memory.
-         * @param cvMat cv::Mat to be copied.
+         * Equivalent to default constructor, but it does not allocate memory, but rather use dataPtr.
+         * @param size Integer with the number of T element to be allocated. E.g., size = 5 is internally similar to
+         * `new T[5]`.
+         * @param dataPtr Pointer to the memory to be used by the Array.
          */
-        void setFrom(const cv::Mat& cvMat);
+        void reset(const int size, T* const dataPtr);
+
+        /**
+         * Data allocation function.
+         * Equivalent to default constructor, but it does not allocate memory, but rather use dataPtr.
+         * @param sizes Vector with the size of each dimension. E.g., size = {3, 5, 2} is internally similar to:
+         * `new T[3*5*2]`.
+         * @param dataPtr Pointer to the memory to be used by the Array.
+         */
+        void reset(const std::vector<int>& sizes, T* const dataPtr);
+
+        /**
+         * Data allocation function.
+         * It internally allocates memory and copies the data of the argument to the Array allocated memory.
+         * @param cvMat Matrix to be copied.
+         */
+        void setFrom(const Matrix& cvMat);
 
         /**
          * Data allocation function.
@@ -293,27 +332,27 @@ namespace op
         }
 
         /**
-         * Return a cv::Mat wrapper to the data. It forbids the data to be modified.
+         * Return a Matrix wrapper to the data. It forbids the data to be modified.
          * OpenCV only admits unsigned char, signed char, int, float & double. If the T class is not supported by
          * OpenCV, it will throw an error.
-         * Note: Array<T> does not return an editable cv::Mat because some OpenCV functions reallocate memory and it
+         * Note: Array<T> does not return an editable Matrix because some OpenCV functions reallocate memory and it
          * would not longer point to the Array<T> instance.
-         * If you want to perform some OpenCV operation on the Array data, you can use: 
+         * If you want to perform some OpenCV operation on the Array data, you can use:
          *     editedCvMat = array.getConstCvMat().clone();
          *     // modify data
          *     array.setFrom(editedCvMat)
-         * @return A const cv::Mat pointing to the data.
+         * @return A const Matrix pointing to the data.
          */
-        const cv::Mat& getConstCvMat() const;
+        const Matrix& getConstCvMat() const;
 
         /**
-         * Analogous to getConstCvMat, but in this case it returns a editable cv::Mat.
+         * Analogous to getConstCvMat, but in this case it returns a editable Matrix.
          * Very important: Only allowed functions which do not provoke data reallocation.
-         * E.g., resizing functions will not work and they would provoke an undefined behaviour and/or execution
+         * E.g., resizing functions will not work and they would provoke an undefined behavior and/or execution
          * crashes.
-         * @return A cv::Mat pointing to the data.
+         * @return A Matrix pointing to the data.
          */
-        cv::Mat& getCvMat();
+        Matrix& getCvMat();
 
         /**
          * [] operator
@@ -440,7 +479,7 @@ namespace op
         size_t mVolume;
         std::shared_ptr<T> spData;
         T* pData; // pData is a wrapper of spData. Used for Pybind11 binding.
-        std::pair<bool, cv::Mat> mCvMatData;
+        std::pair<bool, Matrix> mCvMatData;
 
         /**
          * Auxiliar function that both operator[](const std::vector<int>& indexes) and

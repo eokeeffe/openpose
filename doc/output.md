@@ -1,29 +1,79 @@
-OpenPose Demo - Output
+OpenPose - Output
 ====================================
 
 
 
 ## Contents
-1. [Output Format](#output-format)
-    1. [Keypoint Ordering](#keypoint-ordering)
-    2. [Heatmap Ordering](#heatmap-ordering)
-    3. [Face and Hands](#face-and-hands)
-    4. [Pose Output Format](#pose-output-format)
-    5. [Face Output Format](#face-output-format)
-    6. [Hand Output Format](#hand-output-format)
-3. [Reading Saved Results](#reading-saved-results)
-4. [Keypoint Format in the C++ API](#keypoint-format-in-the-c-api)
+1. [UI and Visual Output](#ui-and-visual-output)
+2. [JSON-UI Mapping](#json-ui-mapping)
+    1. [Pose Output Format (BODY_25)](#pose-output-format-body_25)
+    2. [Pose Output Format (COCO)](#pose-output-format-coco)
+    3. [Face Output Format](#face-output-format)
+    4. [Hand Output Format](#hand-output-format)
+3. [JSON Output Format](#output-format)
+4. [Keypoints in C++/Python](#body-keypoints-in-c-python)
+    1. [Keypoint Ordering in C++/Python](#body-keypoint-ordering-in-c-python)
+    2. [Keypoint Format in Datum (Advanced)](#keypoint-format-in-datum-advanced)
+5. [Reading Saved Results](#reading-saved-results)
+6. [Advanced](#advanced)
+    1. [Camera Matrix Output Format](#camera-matrix-output-format)
+    2. [Heatmaps](#heatmaps)
 
 
 
-## Output Format
-There are 2 alternatives to save the OpenPose output.
 
-1. The `write_json` flag saves the people pose data using a custom JSON writer. Each JSON file has a `people` array of objects, where each object has:
-    1. An array `pose_keypoints_2d` containing the body part locations and detection confidence formatted as `x1,y1,c1,x2,y2,c2,...`. The coordinates `x` and `y` can be normalized to the range [0,1], [-1,1], [0, source size], [0, output size], etc., depending on the flag `keypoint_scale` (see flag for more information), while `c` is the confidence score in the range [0,1].
-    2. The arrays `face_keypoints_2d`, `hand_left_keypoints_2d`, and `hand_right_keypoints_2d`, analogous to `pose_keypoints_2d`.
-    3. The analogous 3-D arrays `body_keypoints_3d`, `face_keypoints_3d`, `hand_left_keypoints_2d`, and `hand_right_keypoints_2d` (if `--3d` is enabled, otherwise they will be empty). Instead of `x1,y1,c1,x2,y2,c2,...`, their format is `x1,y1,z1,c1,x2,y2,z2,c2,...`, where `c` is simply 1 or 0 depending on whether the 3-D reconstruction was successful or not.
-    4. The body part candidates before being assembled into people (if `--part_candidates` is enabled).
+
+## UI and Visual Output
+The visual GUI should show the original image with the poses blended on it, similarly to the pose of this gif:
+<p align="center">
+    <img src="../.github/media/shake.gif", width="720">
+</p>
+
+
+
+
+
+## JSON-UI Mapping
+The output of the JSON files consist of a set of keypoints, whose ordering is related with the UI output as follows:
+
+### Pose Output Format (BODY_25)
+<p align="center">
+    <img src="../.github/media/keypoints_pose_25.png", width="480">
+</p>
+
+
+
+### Pose Output Format (COCO)
+<p align="center">
+    <img src="../.github/media/keypoints_pose_18.png", width="480">
+</p>
+
+
+
+### Face Output Format
+<p align="center">
+    <img src="../.github/media/keypoints_face.png", width="480">
+</p>
+
+
+
+### Hand Output Format
+<p align="center">
+    <img src="../.github/media/keypoints_hand.png", width="480">
+</p>
+
+
+
+
+
+## JSON Output Format
+There are 2 alternatives to save the OpenPose output. But both of them follow the keypoint ordering described in the [Keypoint Ordering in C++/Python](#body-keypoints-in-c-python) section (which you should read next).
+
+1. The `--write_json` flag saves the people pose data onto JSON files. Each file represents a frame, it has a `people` array of objects, where each object has:
+    1. `pose_keypoints_2d`: Body part locations (`x`, `y`) and detection confidence (`c`) formatted as `x0,y0,c0,x1,y1,c1,...`. The coordinates `x` and `y` can be normalized to the range [0,1], [-1,1], [0, source size], [0, output size], etc. (see the flag `--keypoint_scale` for more information), while the confidence score (`c`) in the range [0,1].
+    2. `face_keypoints_2d`, `hand_left_keypoints_2d`, and `hand_right_keypoints_2d` are analogous to `pose_keypoints_2d` but applied to the face and hand parts.
+    3. `body_keypoints_3d`, `face_keypoints_3d`, `hand_left_keypoints_2d`, and `hand_right_keypoints_2d` are analogous but applied to the 3-D parts. They are empty if `--3d` is not enabled. Their format is `x0,y0,z0,c0,x1,y1,z1,c1,...`, where `c` is 1 or 0 depending on whether the 3-D reconstruction was successful or not.
+    4. `part_candidates` (optional and advanced): The body part candidates before being assembled into people. Empty if `--part_candidates` is not enabled (see that flag for more details).
 ```
 {
     "version":1.1,
@@ -65,20 +115,25 @@ There are 2 alternatives to save the OpenPose output.
 }
 ```
 
-2. (Deprecated) The `write_keypoint` flag uses the OpenCV cv::FileStorage default formats, i.e., JSON (available after OpenCV 3.0), XML, and YML. Note that it does not include any other information othern than keypoints.
-
-Both of them follow the keypoint ordering described in the [Keypoint Ordering](#keypoint-ordering) section.
+2. (Deprecated) `--write_keypoint` uses the OpenCV `cv::FileStorage` default formats, i.e., JSON (if OpenCV 3 or higher), XML, and YML. It only prints 2D body information (no 3D or face/hands).
 
 
 
-### Keypoint Ordering
-The body part mapping order of any body model (e.g., COCO, MPI) can be extracted from the C++ API by using the `getPoseBodyPartMapping(const PoseModel poseModel)` function available in [poseParameters.hpp](../include/openpose/pose/poseParameters.hpp):
+
+
+## Keypoints in C++/Python
+### Keypoint Ordering in C++/Python
+The body part mapping order of any body model (e.g., `BODY_25`, `COCO`, `MPI`) can be extracted from the C++ and Python APIs.
+
+- In C++, `getPoseBodyPartMapping(const PoseModel poseModel)` is available in [poseParameters.hpp](../include/openpose/pose/poseParameters.hpp):
 ```
 // C++ API call
 #include <openpose/pose/poseParameters.hpp>
 const auto& poseBodyPartMappingBody25 = getPoseBodyPartMapping(PoseModel::BODY_25);
 const auto& poseBodyPartMappingCoco = getPoseBodyPartMapping(PoseModel::COCO_18);
 const auto& poseBodyPartMappingMpi = getPoseBodyPartMapping(PoseModel::MPI_15);
+const auto& poseBodyPartMappingBody25B = getPoseBodyPartMapping(PoseModel::BODY_25B);
+const auto& poseBodyPartMappingBody135 = getPoseBodyPartMapping(PoseModel::BODY_135);
 
 // Result for BODY_25 (25 body parts consisting of COCO + foot)
 // const std::map<unsigned int, std::string> POSE_BODY_25_BODY_PARTS {
@@ -111,70 +166,20 @@ const auto& poseBodyPartMappingMpi = getPoseBodyPartMapping(PoseModel::MPI_15);
 // };
 ```
 
-
-
-### Heatmap Ordering
-For the **heat maps storing format**, instead of saving each of the 67 heatmaps (18 body parts + background + 2 x 19 PAFs) individually, the library concatenates them into a huge (width x #heat maps) x (height) matrix (i.e., concatenated by columns). E.g., columns [0, individual heat map width] contains the first heat map, columns [individual heat map width + 1, 2 * individual heat map width] contains the second heat map, etc. Note that some image viewers are not able to display the resulting images due to the size. However, Chrome and Firefox are able to properly open them.
-
-The saving order is body parts + background + PAFs. Any of them can be disabled with program flags. If background is disabled, then the final image will be body parts + PAFs. The body parts and background follow the order of `getPoseBodyPartMapping(const PoseModel poseModel)`.
-
-The PAFs follow the order specified on `getPosePartPairs(const PoseModel poseModel)` together with `getPoseMapIndex(const PoseModel poseModel)`. E.g., assuming COCO (see example code below), the PAF channels in COCO start in 19 (smallest number in `getPoseMapIndex`, equal to #body parts + 1), and end up in 56 (highest one). Then, we can match its value from `getPosePartPairs`. For instance, 19 (x-channel) and 20 (y-channel) in `getPoseMapIndex` correspond to PAF from body part 1 to 8; 21 and 22 correspond to x,y channels in the joint from body part 8 to 9, etc. Note that if the smallest channel is odd (19), then all the x-channels are odd, and all the y-channels even. If the smallest channel is even, then the opposite will happen.
+- You can also check them on Python:
 ```
-// C++ API call
-#include <openpose/pose/poseParameters.hpp>
-const auto& posePartPairsBody25 = getPosePartPairs(PoseModel::BODY_25);
-const auto& posePartPairsCoco = getPosePartPairs(PoseModel::COCO_18);
-const auto& posePartPairsMpi = getPosePartPairs(PoseModel::MPI_15);
-
-// getPosePartPairs(PoseModel::BODY_25) result
-// Each index is the key value corresponding to each body part in `getPoseBodyPartMapping`. E.g., 1 for "Neck", 2 for "RShoulder", etc.
-// 1,8,   1,2,   1,5,   2,3,   3,4,   5,6,   6,7,   8,9,   9,10,  10,11, 8,12,  12,13, 13,14,  1,0,   0,15, 15,17,  0,16, 16,18,   2,17,  5,18,   14,19,19,20,14,21, 11,22,22,23,11,24
-
-// getPoseMapIndex(PoseModel::BODY_25) result
-// 0,1, 14,15, 22,23, 16,17, 18,19, 24,25, 26,27, 6,7, 2,3, 4,5, 8,9, 10,11, 12,13, 30,31, 32,33, 36,37, 34,35, 38,39, 20,21, 28,29, 40,41,42,43,44,45, 46,47,48,49,50,51
+poseModel = op.PoseModel.BODY_25
+print(op.getPoseBodyPartMapping(poseModel))
+print(op.getPoseNumberBodyParts(poseModel))
+print(op.getPosePartPairs(poseModel))
+print(op.getPoseMapIndex(poseModel))
 ```
 
 
 
-### Face and Hands
-The output format is analogous for hand (`hand_left_keypoints`, `hand_right_keypoints`) and face (`face_keypoints`) JSON files.
+### Keypoint Format in Datum (Advanced)
+This section is only for advance users that plan to use the C++ API. Not needed for the OpenPose demo and/or Python API.
 
-
-
-### Pose Output Format (BODY_25)
-<p align="center">
-    <img src="media/keypoints_pose_25.png", width="480">
-</p>
-
-
-
-### Pose Output Format (COCO)
-<p align="center">
-    <img src="media/keypoints_pose_18.png", width="480">
-</p>
-
-
-
-### Face Output Format
-<p align="center">
-    <img src="media/keypoints_face.png", width="480">
-</p>
-
-
-
-### Hand Output Format
-<p align="center">
-    <img src="media/keypoints_hand.png", width="480">
-</p>
-
-
-
-## Reading Saved Results
-We use standard formats (JSON, XML, PNG, JPG, ...) to save our results, so there are many open-source libraries to read them in most programming languages. From C++, but you might the functions in [include/openpose/filestream/fileStream.hpp](../include/openpose/filestream/fileStream.hpp). In particular, `loadData` (for JSON, XML and YML files) and `loadImage` (for image formats such as PNG or JPG) to load the data into cv::Mat format.
-
-
-
-## Keypoint Format in the C++ API
 There are 3 different keypoint `Array<float>` elements in the `Datum` class:
 
 1. Array<float> **poseKeypoints**: In order to access person `person` and body part `part` (where the index matches `POSE_COCO_BODY_PARTS` or `POSE_MPI_BODY_PARTS`), you can simply output:
@@ -236,3 +241,23 @@ There are 3 different keypoint `Array<float>` elements in the `Datum` class:
     const auto yR = handKeypoints[1][baseIndex + 1];
     const auto scoreR = handKeypoints[1][baseIndex + 2];
 ```
+
+
+
+
+
+## Reading Saved Results
+We use the standard formats (JSON, PNG, JPG, ...) to save our results, so there are many open-source libraries to read them in most programming languages (especially Python). For C++, you might want to check [include/openpose/filestream/fileStream.hpp](../include/openpose/filestream/fileStream.hpp). In particular, `loadData` (for JSON, XML and YML files) and `loadImage` (for image formats such as PNG or JPG) to load the data into cv::Mat format.
+
+
+
+
+
+## Advanced
+### Camera Matrix Output Format
+If you need to use the camera calibration or 3D modules, the camera matrix output format is detailed in [doc/advanced/calibration_module.md#camera-matrix-output-format](advanced/calibration_module.md#camera-matrix-output-format).
+
+
+
+### Heatmaps
+If you need to use heatmaps, check [doc/output_advanced_heatmaps.md](output_advanced_heatmaps.md).

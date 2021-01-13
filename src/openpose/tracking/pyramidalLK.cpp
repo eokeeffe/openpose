@@ -1,20 +1,19 @@
-// #include <iostream>
+#include <openpose_private/tracking/pyramidalLK.hpp>
+#ifdef WITH_SSE4
+    #include <emmintrin.h>
+    #include "smmintrin.h"
+#endif
+
+#ifdef WITH_AVX
+    #include <immintrin.h>
+#endif
+
+#include <iostream>
 #include <opencv2/core/core.hpp> // cv::Point2f, cv::Mat
 #include <opencv2/imgproc/imgproc.hpp> // cv::pyrDown
 #include <opencv2/video/video.hpp> // cv::buildOpticalFlowPyramid
 #include <openpose/utilities/profiler.hpp>
-#include <openpose/tracking/pyramidalLK.hpp>
 
-#if defined (WITH_SSE4)
-#include <emmintrin.h>
-#include "smmintrin.h"
-#endif
-
-#if defined (WITH_AVX)
-#include <immintrin.h>
-#endif
-
-#include <iostream>
 //#define DEBUG
 // #ifdef DEBUG
 // // When debugging is enabled, these form aliases to useful functions
@@ -32,7 +31,7 @@
 
 namespace op
 {
-#if defined (WITH_SSE4)
+#ifdef WITH_SSE4
     float sse_dot_product(std::vector<float> &av, std::vector<float> &bv)
     {
 
@@ -51,7 +50,7 @@ namespace op
       /* Do SIMD dot product */
       for (unsigned int i = 0; i < niters; i++, ptrA++,ptrB++)
         res = _mm_add_ps(_mm_dp_ps(*ptrA, *ptrB, 255), res);
-      
+
 
       /* Get result back from the SIMD vector */
       float fres[4];
@@ -68,39 +67,38 @@ namespace op
     }
 #endif
 
-#if defined (WITH_AVX)
-
+// Function aligned_alloc requires C++17 in VS
+#if defined (WITH_AVX) && !defined (_WIN32)
     float avx_dot_product(std::vector<float> &av, std::vector<float> &bv)
     {
+        /* Get SIMD-vector pointers to the start of each vector */
+        const size_t niters = av.size() / 8;
 
-      /* Get SIMD-vector pointers to the start of each vector */
-      unsigned int niters = av.size() / 8;
+        float *a = (float *)aligned_alloc(32, av.size() * sizeof(float));
+        float *b = (float *)aligned_alloc(32, av.size() * sizeof(float));
+        memcpy(a, &av[0], av.size() * sizeof(float));
+        memcpy(b, &bv[0], bv.size() * sizeof(float));
 
-      float *a = (float *) aligned_alloc(32, av.size()*sizeof(float));
-      float *b = (float *) aligned_alloc(32, av.size()*sizeof(float));
-      memcpy(a,&av[0],av.size()*sizeof(float));
-      memcpy(b,&bv[0],bv.size()*sizeof(float));
+        __m256 *ptrA = (__m256*) &a[0], *ptrB = (__m256*) &b[0];
+        __m256 res = _mm256_set1_ps(0.0);
 
-      __m256 *ptrA = (__m256*) &a[0], *ptrB = (__m256*) &b[0];
-      __m256 res = _mm256_set1_ps(0.0);
+        for (size_t i = 0; i < niters; i++, ptrA++, ptrB++)
+            res = _mm256_add_ps(_mm256_dp_ps(*ptrA, *ptrB, 255), res);
 
-      for (unsigned int i = 0; i < niters; i++, ptrA++,ptrB++)
-        res = _mm256_add_ps(_mm256_dp_ps(*ptrA, *ptrB, 255), res);
+        /* Get result back from the SIMD vector */
+        float fres[8];
+        _mm256_storeu_ps(fres, res);
+        const size_t q = 8 * niters;
 
-      /* Get result back from the SIMD vector */
-      float fres[8];
-      _mm256_storeu_ps (fres, res);
-      int q = 8 * niters;
+        for (size_t i = 0; i < av.size() % 8; i++)
+            fres[0] += (a[i + q] * b[i + q]);
 
-      for (unsigned int i = 0; i < av.size() % 8; i++)
-        fres[0] += (a[i+q]*b[i+q]);
+        free(a);
+        free(b);
 
-      free(a);
-      free(b);
-
-      return fres[0] + fres[4];
+        return fres[0] + fres[4];
     }
-#endif 
+#endif
 
     char computeLK(cv::Point2f& delta,  std::vector<float>& ix,
                   std::vector<float>& iy, std::vector<float>& it)
@@ -108,34 +106,33 @@ namespace op
         try
         {
             // Calculate sums
+#if defined (WITH_AVX) && !defined (_WIN32)
+            const float sumXX = avx_dot_product(ix,ix);
+            const float sumYY = avx_dot_product(iy,iy);
+            const float sumXY = avx_dot_product(ix,iy);
+            const float sumXT = avx_dot_product(ix,it);
+            const float sumYT = avx_dot_product(iy,it);
+#elif defined (WITH_SSE4)
+            const float sumXX = sse_dot_product(ix,ix);
+            const float sumYY = sse_dot_product(iy,iy);
+            const float sumXY = sse_dot_product(ix,iy);
+            const float sumXT = sse_dot_product(ix,it);
+            const float sumYT = sse_dot_product(iy,it);
+#else
             auto sumXX = 0.f;
             auto sumYY = 0.f;
             auto sumXT = 0.f;
             auto sumYT = 0.f;
             auto sumXY = 0.f;
-
-#if defined (WITH_AVX)
-            sumXX = avx_dot_product(ix,ix);
-            sumYY = avx_dot_product(iy,iy);
-            sumXY = avx_dot_product(ix,iy);
-            sumXT = avx_dot_product(ix,it);
-            sumYT = avx_dot_product(iy,it);
-#elif defined (WITH_SSE4)
-            sumXX = sse_dot_product(ix,ix);
-            sumYY = sse_dot_product(iy,iy);
-            sumXY = sse_dot_product(ix,iy);
-            sumXT = sse_dot_product(ix,it);
-            sumYT = sse_dot_product(iy,it);
-#else            
             for (auto i = 0u; i < ix.size(); i++)
             {
-              sumXX += ix[i] * ix[i];
-              sumYY += iy[i] * iy[i];
-              sumXY += ix[i] * iy[i];
-              sumXT += ix[i] * it[i];
-              sumYT += iy[i] * it[i];
-            }            
-#endif            
+                sumXX += ix[i] * ix[i];
+                sumYY += iy[i] * iy[i];
+                sumXY += ix[i] * iy[i];
+                sumXT += ix[i] * it[i];
+                sumYT += iy[i] * it[i];
+            }
+#endif
 
             // Get numerator and denominator of u and v
             const auto den = (sumXX*sumYY) - (sumXY * sumXY);
@@ -250,6 +247,7 @@ namespace op
             return UNDEFINED_ERROR;
         }
     }
+
     // Given an OpenCV image, build a gaussian pyramid of size 'levels'
     void buildGaussianPyramid(std::vector<cv::Mat>& pyramidImages, const cv::Mat& image, const int levels)
     {
@@ -270,8 +268,6 @@ namespace op
             error(e.what(), __LINE__, __FUNCTION__, __FILE__);
         }
     }
-
-
 
     cv::Point2f pyramidIteration(char& status, const cv::Point2f& pointI, const cv::Point2f& pointJ, const cv::Mat& I,
                                  const cv::Mat& J, const int patchSize = 5)
@@ -335,12 +331,12 @@ namespace op
 
             coordJ.clear();
             coordJ.assign(I.begin(), I.end());
-            
+
             if (pyramidImagesPrevious.empty())
                 buildGaussianPyramid(pyramidImagesPrevious, imagePrevious, levels);
             if (pyramidImagesCurrent.empty())
                 buildGaussianPyramid(pyramidImagesCurrent, imageCurrent, levels);
-  
+
 
             // Process all pixel requests
             for (auto i = 0u; i < coordI.size(); i++)
@@ -364,8 +360,6 @@ namespace op
                     coordJ[i] *= 2.f;
                 }
             }
-     
-
         }
         catch (const std::exception& e)
         {
@@ -419,7 +413,7 @@ namespace op
                 // Check distance
                 for (size_t i=0; i<status.size(); i++)
                 {
-                    const float distance = std::sqrt(
+                    const double distance = std::sqrt(
                         std::pow(coordI[i].x-coordJ[i].x,2) + std::pow(coordI[i].y-coordJ[i].y,2));
 
                     // Check if lk loss track, if distance is close keep it

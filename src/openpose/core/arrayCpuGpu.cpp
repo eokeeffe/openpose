@@ -1,8 +1,8 @@
+#include <openpose/core/arrayCpuGpu.hpp>
 #ifdef USE_CAFFE
     #include <caffe/blob.hpp>
 #endif
 #include <openpose/utilities/errorAndLog.hpp>
-#include <openpose/core/arrayCpuGpu.hpp>
 
 namespace op
 {
@@ -10,8 +10,13 @@ namespace op
     struct ArrayCpuGpu<T>::ImplArrayCpuGpu
     {
         #ifdef USE_CAFFE
-            std::unique_ptr<caffe::Blob<T>> upCaffeBlobT;
-            caffe::Blob<T>* pCaffeBlobT;
+            #ifdef NV_CAFFE
+                std::unique_ptr<caffe::TBlob<T>> upCaffeBlobT;
+                caffe::TBlob<T>* pCaffeBlobT;
+            #else
+                std::unique_ptr<caffe::Blob<T>> upCaffeBlobT;
+                caffe::Blob<T>* pCaffeBlobT;
+            #endif
         #endif
     };
 
@@ -25,7 +30,11 @@ namespace op
             #ifdef USE_CAFFE
                 // Construct spImpl
                 spImpl.reset(new ImplArrayCpuGpu{});
-                spImpl->upCaffeBlobT.reset(new caffe::Blob<T>{});
+                #ifdef NV_CAFFE
+                    spImpl->upCaffeBlobT.reset(new caffe::TBlob<T>{});
+                #else
+                    spImpl->upCaffeBlobT.reset(new caffe::Blob<T>{});
+                #endif
                 spImpl->pCaffeBlobT = spImpl->upCaffeBlobT.get();
             #else
                 error(constructorErrorMessage, __LINE__, __FUNCTION__, __FILE__);
@@ -45,7 +54,11 @@ namespace op
             #ifdef USE_CAFFE
                 // Construct spImpl
                 spImpl.reset(new ImplArrayCpuGpu{});
-                spImpl->pCaffeBlobT = (caffe::Blob<T>*)caffeBlobTPtr;
+                #ifdef NV_CAFFE
+                    spImpl->pCaffeBlobT = (caffe::TBlob<T>*)caffeBlobTPtr;
+                #else
+                    spImpl->pCaffeBlobT = (caffe::Blob<T>*)caffeBlobTPtr;
+                #endif
             #else
                 UNUSED(caffeBlobTPtr);
                 error(constructorErrorMessage, __LINE__, __FUNCTION__, __FILE__);
@@ -74,7 +87,11 @@ namespace op
                     arraySize.emplace_back(sizeI);
                 // Construct spImpl
                 spImpl.reset(new ImplArrayCpuGpu{});
-                spImpl->upCaffeBlobT.reset(new caffe::Blob<T>{arraySize});
+                #ifdef NV_CAFFE
+                    spImpl->upCaffeBlobT.reset(new caffe::TBlob<T>{arraySize});
+                #else
+                    spImpl->upCaffeBlobT.reset(new caffe::Blob<T>{arraySize});
+                #endif
                 spImpl->pCaffeBlobT = spImpl->upCaffeBlobT.get();
                 // Copy data
                 // CPU copy
@@ -107,7 +124,11 @@ namespace op
             #ifdef USE_CAFFE
                 // Construct spImpl
                 spImpl.reset(new ImplArrayCpuGpu{});
-                spImpl->upCaffeBlobT.reset(new caffe::Blob<T>{num, channels, height, width});
+                #ifdef NV_CAFFE
+                    spImpl->upCaffeBlobT.reset(new caffe::TBlob<T>{num, channels, height, width});
+                #else
+                    spImpl->upCaffeBlobT.reset(new caffe::Blob<T>{num, channels, height, width});
+                #endif
                 spImpl->pCaffeBlobT = spImpl->upCaffeBlobT.get();
             #else
                 UNUSED(num);
@@ -784,7 +805,7 @@ namespace op
         try
         {
             #ifdef USE_CAFFE
-                return spImpl->pCaffeBlobT->asum_data();
+                return spImpl->pCaffeBlobT->asum_diff();
             #else
                 return T{0};
             #endif
@@ -802,7 +823,7 @@ namespace op
         try
         {
             #ifdef USE_CAFFE
-                return spImpl->pCaffeBlobT->asum_data();
+                return spImpl->pCaffeBlobT->sumsq_data();
             #else
                 return T{0};
             #endif
@@ -820,7 +841,7 @@ namespace op
         try
         {
             #ifdef USE_CAFFE
-                return spImpl->pCaffeBlobT->asum_data();
+                return spImpl->pCaffeBlobT->sumsq_diff();
             #else
                 return T{0};
             #endif

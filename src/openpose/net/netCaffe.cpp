@@ -1,3 +1,4 @@
+#include <openpose/net/netCaffe.hpp>
 #include <numeric> // std::accumulate
 #ifdef USE_CAFFE
     #include <atomic>
@@ -8,13 +9,12 @@
 #ifdef USE_CUDA
     #include <openpose/gpu/cuda.hpp>
 #endif
-#ifdef USE_OPENCL
-    #include <openpose/gpu/opencl.hcl>
-    #include <openpose/gpu/cl2.hpp>
-#endif
 #include <openpose/utilities/fileSystem.hpp>
 #include <openpose/utilities/standard.hpp>
-#include <openpose/net/netCaffe.hpp>
+#ifdef USE_OPENCL
+    #include <openpose_private/gpu/opencl.hcl>
+    #include <openpose_private/gpu/cl2.hpp>
+#endif
 
 namespace op
 {
@@ -34,8 +34,13 @@ namespace op
             const std::string mLastBlobName;
             std::vector<int> mNetInputSize4D;
             // Init with thread
-            std::unique_ptr<caffe::Net<float>> upCaffeNet;
-            boost::shared_ptr<caffe::Blob<float>> spOutputBlob;
+            #ifdef NV_CAFFE
+                std::unique_ptr<caffe::Net> upCaffeNet;
+                boost::shared_ptr<caffe::TBlob<float>> spOutputBlob;
+            #else
+                std::unique_ptr<caffe::Net<float>> upCaffeNet;
+                boost::shared_ptr<caffe::Blob<float>> spOutputBlob;
+            #endif
 
             ImplNetCaffe(const std::string& caffeProto, const std::string& caffeTrainedModel, const int gpuId,
                          const bool enableGoogleLogging, const std::string& lastBlobName) :
@@ -46,9 +51,12 @@ namespace op
             {
                 try
                 {
-                    const std::string message{".\nPossible causes:\n\t1. Not downloading the OpenPose trained models."
-                                              "\n\t2. Not running OpenPose from the same directory where the `model`"
-                                              " folder is located.\n\t3. Using paths with spaces."};
+                    const std::string message{".\nPossible causes:\n"
+                        "\t1. Not downloading the OpenPose trained models.\n"
+                        "\t2. Not running OpenPose from the root directory (i.e., where the `model` folder is located, but do not move the `model` folder!). E.g.,\n"
+                        "\t\tRight example for the Windows portable binary: `cd {OpenPose_root_path}; bin/openpose.exe`\n"
+                        "\t\tWrong example for the Windows portable binary: `cd {OpenPose_root_path}/bin; openpose.exe`\n"
+                        "\t3. Using paths with spaces."};
                     if (!existFile(mCaffeProto))
                         error("Prototxt file not found: " + mCaffeProto + message, __LINE__, __FUNCTION__, __FILE__);
                     if (!existFile(mCaffeTrainedModel))
@@ -93,7 +101,11 @@ namespace op
     };
 
     #ifdef USE_CAFFE
+        #ifdef NV_CAFFE
+        inline void reshapeNetCaffe(caffe::Net* caffeNet, const std::vector<int>& dimensions)
+        #else
         inline void reshapeNetCaffe(caffe::Net<float>* caffeNet, const std::vector<int>& dimensions)
+        #endif
         {
             try
             {
@@ -156,7 +168,11 @@ namespace op
                     #ifdef USE_CUDA
                         caffe::Caffe::set_mode(caffe::Caffe::GPU);
                         caffe::Caffe::SetDevice(upImpl->mGpuId);
-                        upImpl->upCaffeNet.reset(new caffe::Net<float>{upImpl->mCaffeProto, caffe::TEST});
+                        #ifdef NV_CAFFE
+                            upImpl->upCaffeNet.reset(new caffe::Net{upImpl->mCaffeProto, caffe::TEST});
+                        #else
+                            upImpl->upCaffeNet.reset(new caffe::Net<float>{upImpl->mCaffeProto, caffe::TEST});
+                        #endif
                     #else
                         caffe::Caffe::set_mode(caffe::Caffe::CPU);
                         #ifdef _WIN32
@@ -172,7 +188,12 @@ namespace op
                     #endif
                 #endif
                 // Set spOutputBlob
-                upImpl->spOutputBlob = upImpl->upCaffeNet->blob_by_name(upImpl->mLastBlobName);
+                #ifdef NV_CAFFE
+                    upImpl->spOutputBlob = boost::static_pointer_cast<caffe::TBlob<float>>(
+                        upImpl->upCaffeNet->blob_by_name(upImpl->mLastBlobName));
+                #else
+                    upImpl->spOutputBlob = upImpl->upCaffeNet->blob_by_name(upImpl->mLastBlobName);
+                #endif
                 // Sanity check
                 if (upImpl->spOutputBlob == nullptr)
                     error("The output blob is a nullptr. Did you use the same name than the prototxt? (Used: "
@@ -207,7 +228,11 @@ namespace op
                 }
                 // Copy frame data to GPU memory
                 #ifdef USE_CUDA
-                    auto* gpuImagePtr = upImpl->upCaffeNet->blobs().at(0)->mutable_gpu_data();
+                    #ifdef NV_CAFFE
+                        auto* gpuImagePtr = upImpl->upCaffeNet->blobs().at(0)->mutable_gpu_data<float>();
+                    #else
+                        auto* gpuImagePtr = upImpl->upCaffeNet->blobs().at(0)->mutable_gpu_data();
+                    #endif
                     cudaMemcpy(gpuImagePtr, inputData.getConstPtr(), inputData.getVolume() * sizeof(float),
                                cudaMemcpyHostToDevice);
                 #elif defined USE_OPENCL

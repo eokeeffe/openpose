@@ -77,29 +77,29 @@ namespace op
 
     // Printing info - How to use:
         // It will print info if desiredPriority >= sPriorityThreshold
-        // log(message, desiredPriority, __LINE__, __FUNCTION__, __FILE__);
-    OP_API void log(
+        // opLog(message, desiredPriority, __LINE__, __FUNCTION__, __FILE__);
+    OP_API void opLog(
         const std::string& message, const Priority priority = Priority::Max, const int line = -1,
         const std::string& function = "", const std::string& file = "");
 
     template<typename T>
-    inline void log(
+    inline void opLog(
         const T& message, const Priority priority = Priority::Max, const int line = -1,
         const std::string& function = "", const std::string& file = "")
     {
-        log(tToString(message), priority, line, function, file);
+        opLog(tToString(message), priority, line, function, file);
     }
 
     // If only desired on debug mode (no computational cost at all on release mode):
         // It will print info if desiredPriority >= sPriorityThreshold
-        // dLog(message, desiredPriority, __LINE__, __FUNCTION__, __FILE__);
+        // opLogIfDebug(message, desiredPriority, __LINE__, __FUNCTION__, __FILE__);
     template<typename T>
-    inline void dLog(
+    inline void opLogIfDebug(
         const T& message, const Priority priority = Priority::Max, const int line = -1,
         const std::string& function = "", const std::string& file = "")
     {
         #ifndef NDEBUG
-            log(message, priority, line, function, file);
+            opLog(message, priority, line, function, file);
         #else
             UNUSED(message);
             UNUSED(priority);
@@ -117,15 +117,17 @@ namespace op
         OP_API void setErrorModes(const std::vector<ErrorMode>& errorModes);
     }
 
-    // This class is thread-safe
+    // This class is not fully thread-safe
     namespace ConfigureLog
     {
         OP_API Priority getPriorityThreshold();
 
         OP_API const std::vector<LogMode>& getLogModes();
 
+        // This function is not thread-safe. It must be run at the beginning
         OP_API void setPriorityThreshold(const Priority priorityThreshold);
 
+        // This function is not thread-safe. It must be run at the beginning
         OP_API void setLogModes(const std::vector<LogMode>& loggingModes);
     }
 }

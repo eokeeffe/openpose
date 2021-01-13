@@ -1,7 +1,8 @@
+#include <openpose/core/array.hpp>
 #include <typeinfo> // typeid
 #include <numeric> // std::accumulate
-#include <openpose/utilities/errorAndLog.hpp>
-#include <openpose/core/array.hpp>
+#include <opencv2/core/core.hpp> // cv::Mat
+#include <openpose_private/utilities/avx.hpp>
 
 // Note: std::shared_ptr not (fully) supported for array pointers:
 // http://stackoverflow.com/questions/8947579/
@@ -21,12 +22,12 @@ namespace op
      * std::shared_ptr points to.
      */
     template<typename T>
-    void setCvMatFromPtr(std::pair<bool, cv::Mat>& cvMatData, T* const dataPtr, const std::vector<int>& sizes)
+    void setCvMatFromPtr(std::pair<bool, Matrix>& cvMatData, T* const dataPtr, const std::vector<int>& sizes)
     {
         try
         {
             cvMatData.first = true;
-            cvMatData.second = cv::Mat();
+            cvMatData.second = Matrix();
             // BGR image
             if (sizes.size() == 3 && sizes[2] == 3)
             {
@@ -46,7 +47,10 @@ namespace op
                     cvMatData.first = false;
 
                 if (cvMatData.first)
-                    cvMatData.second = cv::Mat(sizes[0], sizes[1], cvFormat, dataPtr);
+                {
+                    cv::Mat cvMat(sizes[0], sizes[1], cvFormat, dataPtr);
+                    cvMatData.second = OP_CV2OPMAT(cvMat);
+                }
             }
             // Any other type
             else
@@ -67,7 +71,10 @@ namespace op
                     cvMatData.first = false;
 
                 if (cvMatData.first)
-                    cvMatData.second = cv::Mat((int)sizes.size(), sizes.data(), cvFormat, dataPtr);
+                {
+                    cv::Mat cvMat((int)sizes.size(), sizes.data(), cvFormat, dataPtr);
+                    cvMatData.second = OP_CV2OPMAT(cvMat);
+                }
             }
         }
         catch (const std::exception& e)
@@ -133,10 +140,7 @@ namespace op
     {
         try
         {
-            if (size > 0)
-                resetAuxiliary(std::vector<int>{size}, dataPtr);
-            else
-                error("Size cannot be less than 1.", __LINE__, __FUNCTION__, __FILE__);
+            reset(size, dataPtr);
         }
         catch (const std::exception& e)
         {
@@ -149,10 +153,7 @@ namespace op
     {
         try
         {
-            if (!sizes.empty())
-                resetAuxiliary(sizes, dataPtr);
-            else
-                error("Size cannot be empty or less than 1.", __LINE__, __FUNCTION__, __FILE__);
+            reset(sizes, dataPtr);
         }
         catch (const std::exception& e)
         {
@@ -180,7 +181,7 @@ namespace op
                 // Allocate memory
                 reset(sizes);
                 // Copy desired index
-                const auto arrayArea = array.getVolume(1);
+                const auto arrayArea = (int)array.getVolume(1);
                 const auto keypointsIndex = index*arrayArea;
                 std::copy(&array[keypointsIndex], &array[keypointsIndex]+arrayArea, pData);
             }
@@ -269,7 +270,7 @@ namespace op
             // Equivalent: std::copy(spData.get(), spData.get() + mVolume, array.spData.get());
             std::copy(pData, pData + mVolume, array.pData);
             // Return
-            return std::move(array);
+            return array;
         }
         catch (const std::exception& e)
         {
@@ -336,16 +337,48 @@ namespace op
     }
 
     template<typename T>
-    void Array<T>::setFrom(const cv::Mat& cvMat)
+    void Array<T>::reset(const int size, T* const dataPtr)
+    {
+        try
+        {
+            if (size > 0)
+                resetAuxiliary(std::vector<int>{size}, dataPtr);
+            else
+                error("Size cannot be less than 1.", __LINE__, __FUNCTION__, __FILE__);
+        }
+        catch (const std::exception& e)
+        {
+            error(e.what(), __LINE__, __FUNCTION__, __FILE__);
+        }
+    }
+
+    template<typename T>
+    void Array<T>::reset(const std::vector<int>& sizes, T* const dataPtr)
+    {
+        try
+        {
+            if (!sizes.empty())
+                resetAuxiliary(sizes, dataPtr);
+            else
+                error("Size cannot be empty or less than 1.", __LINE__, __FUNCTION__, __FILE__);
+        }
+        catch (const std::exception& e)
+        {
+            error(e.what(), __LINE__, __FUNCTION__, __FILE__);
+        }
+    }
+
+    template<typename T>
+    void Array<T>::setFrom(const Matrix& cvMat)
     {
         try
         {
             if (!cvMat.empty())
             {
                 // New size
-                std::vector<int> newSize(cvMat.dims,0);
+                std::vector<int> newSize(cvMat.dims(),0);
                 for (auto i = 0u ; i < newSize.size() ; i++)
-                    newSize[i] = cvMat.size[i];
+                    newSize[i] = cvMat.size(i);
                 // Reset data & volume
                 reset(newSize);
                 // Integrity checks
@@ -502,12 +535,12 @@ namespace op
     }
 
     template<typename T>
-    const cv::Mat& Array<T>::getConstCvMat() const
+    const Matrix& Array<T>::getConstCvMat() const
     {
         try
         {
             if (!mCvMatData.first)
-                error("Array<T>: cv::Mat functions only valid for T types defined by OpenCV: unsigned char,"
+                error("Array<T>: Matrix functions only valid for T types defined by OpenCV: unsigned char,"
                       " signed char, int, float & double", __LINE__, __FUNCTION__, __FILE__);
             return mCvMatData.second;
         }
@@ -519,12 +552,12 @@ namespace op
     }
 
     template<typename T>
-    cv::Mat& Array<T>::getCvMat()
+    Matrix& Array<T>::getCvMat()
     {
         try
         {
             if (!mCvMatData.first)
-                error("Array<T>: cv::Mat functions only valid for T types defined by OpenCV: unsigned char,"
+                error("Array<T>: Matrix functions only valid for T types defined by OpenCV: unsigned char,"
                       " signed char, int, float & double", __LINE__, __FUNCTION__, __FILE__);
             return mCvMatData.second;
         }
@@ -637,8 +670,16 @@ namespace op
                 // Prepare shared_ptr
                 if (dataPtr == nullptr)
                 {
-                    spData.reset(new T[mVolume], std::default_delete<T[]>());
+                    #ifdef WITH_AVX
+                        spData = aligned_shared_ptr<T>(mVolume);
+                    #else
+                        spData.reset(new T[mVolume], std::default_delete<T[]>());
+                    #endif
                     pData = spData.get();
+                    // Sanity check
+                    if (pData == nullptr)
+                        error("Shared pointer could not be allocated for Array data storage.",
+                              __LINE__, __FUNCTION__, __FILE__);
                 }
                 else
                 {
@@ -653,8 +694,8 @@ namespace op
                 mVolume = 0ul;
                 spData.reset();
                 pData = nullptr;
-                // cv::Mat available but empty
-                mCvMatData = std::make_pair(true, cv::Mat());
+                // Matrix available but empty
+                mCvMatData = std::make_pair(true, Matrix());
             }
         }
         catch (const std::exception& e)

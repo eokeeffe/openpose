@@ -1,12 +1,12 @@
+#include <openpose/net/nmsCaffe.hpp>
 #ifdef USE_CAFFE
     #include <caffe/blob.hpp>
 #endif
-#ifdef USE_OPENCL
-    #include <openpose/gpu/opencl.hcl>
-    #include <openpose/gpu/cl2.hpp>
-#endif
 #include <openpose/net/nmsBase.hpp>
-#include <openpose/net/nmsCaffe.hpp>
+#ifdef USE_OPENCL
+    #include <openpose_private/gpu/opencl.hcl>
+    #include <openpose_private/gpu/cl2.hpp>
+#endif
 
 namespace op
 {
@@ -45,9 +45,9 @@ namespace op
             #if defined USE_CAFFE && defined USE_OPENCL
                 try
                 {
-                    if(mKernelGpuPtr != nullptr)
+                    if (mKernelGpuPtr != nullptr)
                         clReleaseMemObject((cl_mem)mKernelGpuPtr);
-                    if(mKernelCpuPtr != nullptr)
+                    if (mKernelCpuPtr != nullptr)
                         delete mKernelCpuPtr;
                 }
                 catch (const std::exception& e)
